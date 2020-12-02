@@ -1,0 +1,54 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "Creates an AWS IAM Role with an two inline policies and two AWS
+  managed policies attached. Adapted from https://github.com/toniblyx/Prowler."
+Parameters:
+  ProwlerRoleName:
+    Description: Name of the IAM role that will have these policies attached.
+    Type: String
+    Default: 'ProwlerExecRole'
+
+Resources:
+  ProwlerExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action: 'sts:AssumeRole'
+      # This is 12h that is maximum allowed, Minimum is 3600 = 1h.
+      # Use -T as in './prowler -R ProwlerExecRole -T 43200'
+      MaxSessionDuration: 43200
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/SecurityAudit'
+        - 'arn:aws:iam::aws:policy/job-function/ViewOnlyAccess'
+      RoleName: !Sub ${ProwlerRoleName}
+      Policies: 
+        - PolicyName: ProwlerExecRoleAdditionalViewPrivileges
+          PolicyDocument:
+            Version : '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+                - 'dax:ListTables'
+                - 'ds:ListAuthorizedApplications'
+                - 'ds:DescribeRoles'
+                - 'ec2:GetEbsEncryptionByDefault'
+                - 'ecr:Describe*'
+                - 'glue:Get*'
+                - 'glue:SearchTables'
+                - 'support:Describe*'
+                - 'tag:GetTagKeys'
+              Resource: '*'
+        - PolicyName: ProwlerExecRoleSecurityHubPrivileges
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+                - 'securityhub:BatchImportFindings'
+                - 'securityhub:GetFindings'
+              Resource: '*'

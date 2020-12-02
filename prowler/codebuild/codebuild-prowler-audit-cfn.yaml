@@ -1,0 +1,262 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Creates a CodeBuild project to audit an AWS account with Prowler
+  and sends 'fails' to Security Hub. Will run once when deployed, and as
+  scheduled thereafter. Adapted from https://github.com/toniblyx/Prowler."
+Parameters:
+  ServiceName:
+    Description: Service name
+    Type: String
+    Default: 'prowler'
+  LogsRetentionInDays:
+    Description: Number of days to retain CodeBuild run log events.'
+    Type: Number
+    Default: 3
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 180, 365]
+  ProwlerOptions:
+    Description: "Prowler command options; ensure '-M json-asff -S -q' is used
+      to send 'fails' to Security Hub."
+    Type: String
+    Default: '-r us-east-1 -f us-east-1 -M json-asff -S -q -c check119'
+  ProwlerScheduler:
+    Description: "When Prowler will run, in cron format."
+    Type: String
+    Default: 'cron(0 22 * * ? *)'
+
+# This custom resource causes stack deletion to fail; retry, skipping deletion of this resource.
+Resources:
+  CodeBuildStartBuild:
+    Type: Custom::CodeBuildStartBuild
+    Properties:
+      Build: !Ref ProwlerCodeBuild
+      ServiceToken:
+        'Fn::GetAtt':
+          - CodeBuildStartBuildLambda
+          - Arn
+
+  CodeBuildStartBuildLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: StartBuildInline
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'codebuild:StartBuild'
+                Resource: '*'
+
+  CodeBuildStartBuildLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      MemorySize: 128
+      Role: !Sub ${CodeBuildStartBuildLambdaRole.Arn}
+      Timeout: 120
+      Runtime: python3.8
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          from botocore.exceptions import ClientError
+
+          def lambda_handler(event,context):
+            props = event['ResourceProperties']
+            codebuild_client = boto3.client('codebuild')
+
+            if (event['RequestType'] == 'Create' or event['RequestType'] == 'Update'):
+              try:
+                  response = codebuild_client.start_build(projectName=props['Build'])
+                  print(response)
+                  print("Respond: SUCCESS")
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as ex:
+                  print(ex.response['Error']['Message'])
+                  cfnresponse.send(event, context, cfnresponse.FAILED, ex.response)
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "Explicit name is required for this resource to avoid circular dependencies."
+    Properties:
+      RoleName: !Sub 'prowler-codebuild-role-${ServiceName}-${AWS::StackName}'
+      Path: '/service-role/'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/job-function/SupportUser'
+        - 'arn:aws:iam::aws:policy/job-function/ViewOnlyAccess'
+        - 'arn:aws:iam::aws:policy/SecurityAudit'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+      Policies:
+        - PolicyName: LogGroup
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*'
+        - PolicyName: CodeBuild
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - codebuild:CreateReportGroup
+                  - codebuild:CreateReport
+                  - codebuild:UpdateReport
+                  - codebuild:BatchPutTestCases
+                  - codebuild:BatchPutCodeCoverages
+                Effect: Allow
+                Resource: !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/*'
+        - PolicyName: SecurityHubFindings
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - securityhub:BatchImportFindings
+                  - securityhub:GetFindings
+                Effect: Allow
+                Resource: !Sub 'arn:aws:securityhub:${AWS::Region}::product/prowler/prowler'
+        - PolicyName: ExtraViewPrivileges
+          PolicyDocument:
+            Version : '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+                - 'dax:ListTables'
+                - 'ds:ListAuthorizedApplications'
+                - 'ds:DescribeRoles'
+                - 'ec2:GetEbsEncryptionByDefault'
+                - 'ecr:Describe*'
+                - 'glue:Get*'
+                - 'glue:SearchTables'
+                - 'support:Describe*'
+                - 'tag:GetTagKeys'
+              Resource: '*'
+        - PolicyName: AssumeRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - sts:AssumeRole
+                Effect: Allow
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/service-role/prowler-codebuild-role-${ServiceName}-${AWS::StackName}'
+
+  ProwlerCodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.8
+              commands:
+                - echo "Installing Prowler and dependencies..."
+                - pip3 install detect-secrets 
+                - yum -y install jq
+                - curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+                - unzip awscliv2.zip
+                - ./aws/install
+                - git clone https://github.com/toniblyx/prowler
+            build:
+              commands:
+                - echo "Running Prowler as ./prowler $PROWLER_OPTIONS"
+                - cd prowler
+                - ./prowler $PROWLER_OPTIONS 
+            post_build:
+              commands:
+                - echo "Done!"
+      Environment:
+        ComputeType: "BUILD_GENERAL1_SMALL"
+        Image: "aws/codebuild/amazonlinux2-x86_64-standard:3.0"
+        Type: "LINUX_CONTAINER"
+        EnvironmentVariables:
+          - Name: PROWLER_OPTIONS
+            Value: !Ref 'ProwlerOptions'
+            Type: PLAINTEXT
+      Description: Run Prowler assessment
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      TimeoutInMinutes: 300
+      
+  ProwlerCodeBuildReportGroup:
+    Type: AWS::CodeBuild::ReportGroup
+    Properties:
+      Name: !Sub 'prowler-report-group-${ServiceName}-${AWS::StackName}'
+      Type: TEST
+      ExportConfig:
+        ExportConfigType: NO_EXPORT
+
+  ProwlerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/codebuild/${ProwlerCodeBuild}'
+      RetentionInDays: !Ref LogsRetentionInDays
+
+  ProwlerSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Schedule for Lambda function that triggers Prowler in CodeBuild.
+      ScheduleExpression: !Ref ProwlerScheduler
+      State: ENABLED
+      Targets:
+        - Arn: !Sub ${ProwlerScheduleLambdaFunction.Arn}
+          Id: ProwlerSchedule
+  
+  ProwlerSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Sub ${ProwlerScheduleLambdaFunction.Arn}
+      Principal: 'events.amazonaws.com'
+      SourceArn: !Sub ${ProwlerSchedule.Arn}
+
+  ProwlerScheduleLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      MemorySize: 128
+      Role: !Sub ${CodeBuildStartBuildLambdaRole.Arn}
+      Timeout: 120
+      Runtime: python3.8
+      Environment:
+        Variables:
+          buildName: !Ref ProwlerCodeBuild
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+
+          def lambda_handler(event,context):
+            codebuild_client = boto3.client('codebuild')
+            print("Running Prowler scheduled!: " + os.environ['buildName'])
+            project_name = os.environ['buildName']
+            response = codebuild_client.start_build(projectName=project_name)
+            print(response)
+            print("Respond: SUCCESS")

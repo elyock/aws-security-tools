@@ -19,7 +19,7 @@ Parameters:
     Type: String
     Default: '-r us-east-1 -f us-east-1 -M json-asff -S -q -c check119'
   ProwlerScheduler:
-    Description: "When Prowler will run, in cron format."
+    Description: "When Prowler will run (UTC/GMT), in cron format."
     Type: String
     Default: 'cron(0 22 * * ? *)'
 

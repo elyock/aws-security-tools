@@ -1,8 +1,8 @@
 ---
 AWSTemplateFormatVersion: 2010-09-09
-Description: "Creates a CodeBuild project to audit an AWS account with Prowler
-  and sends 'fails' to Security Hub. Will run once when deployed, and as
-  scheduled thereafter. Adapted from https://github.com/toniblyx/Prowler."
+Description: "Creates a CodeBuild project, roles, and lambda functions to audit an AWS account
+  with prowler on a schedule. Creates the schedule using time-based events in CloudWatch/EventBridge.
+  By default, Sends 'fails' to Security Hub. Based on https://github.com/toniblyx/Prowler."
 Parameters:
   ServiceName:
     Description: Service name
@@ -12,10 +12,10 @@ Parameters:
     Description: Number of days to retain CodeBuild run log events.'
     Type: Number
     Default: 3
-    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 180, 365]
+    AllowedValues: [1, 3, 7, 14, 30, 60, 90, 180, 365]
   ProwlerOptions:
     Description: "Prowler command options; ensure '-M json-asff -S -q' is used
-      to send 'fails' to Security Hub."
+      to send only 'fails' to Security Hub."
     Type: String
     Default: '-r us-east-1 -f us-east-1 -M json-asff -S -q -c check119'
   ProwlerScheduler:
@@ -25,15 +25,6 @@ Parameters:
 
 # This custom resource causes stack deletion to fail; retry, skipping deletion of this resource.
 Resources:
-  CodeBuildStartBuild:
-    Type: Custom::CodeBuildStartBuild
-    Properties:
-      Build: !Ref ProwlerCodeBuild
-      ServiceToken:
-        'Fn::GetAtt':
-          - CodeBuildStartBuildLambda
-          - Arn
-
   CodeBuildStartBuildLambdaRole:
     Type: AWS::IAM::Role
     Properties:
@@ -56,44 +47,10 @@ Resources:
                 Action:
                   - 'codebuild:StartBuild'
                 Resource: '*'
-
-  CodeBuildStartBuildLambda:
-    Type: AWS::Lambda::Function
-    Properties:
-      Handler: index.lambda_handler
-      MemorySize: 128
-      Role: !Sub ${CodeBuildStartBuildLambdaRole.Arn}
-      Timeout: 120
-      Runtime: python3.8
-      Code:
-        ZipFile: |
-          import boto3
-          import cfnresponse
-          from botocore.exceptions import ClientError
-
-          def lambda_handler(event,context):
-            props = event['ResourceProperties']
-            codebuild_client = boto3.client('codebuild')
-
-            if (event['RequestType'] == 'Create' or event['RequestType'] == 'Update'):
-              try:
-                  response = codebuild_client.start_build(projectName=props['Build'])
-                  print(response)
-                  print("Respond: SUCCESS")
-                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-              except Exception as ex:
-                  print(ex.response['Error']['Message'])
-                  cfnresponse.send(event, context, cfnresponse.FAILED, ex.response)
-
   CodeBuildServiceRole:
     Type: AWS::IAM::Role
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W28
-            reason: "Explicit name is required for this resource to avoid circular dependencies."
     Properties:
-      RoleName: !Sub 'prowler-codebuild-role-${ServiceName}-${AWS::StackName}'
+      RoleName: 'prowler-codebuild-role'
       Path: '/service-role/'
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/job-function/SupportUser'
@@ -164,6 +121,7 @@ Resources:
                 Effect: Allow
                 Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/service-role/prowler-codebuild-role'
 
+  # Hack prevents build failures when prowler returns exit status 3 (it identifies security issues).
   ProwlerCodeBuild:
     Type: AWS::CodeBuild::Project
     Properties:

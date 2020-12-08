@@ -21,7 +21,7 @@ Parameters:
   ProwlerScheduler:
     Description: "When Prowler will run (UTC/GMT), in cron format."
     Type: String
-    Default: 'cron(0 22 * * ? *)'
+    Default: 'cron(0 3 * * ? *)'
 
 # This custom resource causes stack deletion to fail; retry, skipping deletion of this resource.
 Resources:
@@ -162,7 +162,7 @@ Resources:
               - Action:
                   - sts:AssumeRole
                 Effect: Allow
-                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/service-role/prowler-codebuild-role-${ServiceName}-${AWS::StackName}'
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/service-role/prowler-codebuild-role'
 
   ProwlerCodeBuild:
     Type: AWS::CodeBuild::Project
@@ -189,10 +189,10 @@ Resources:
               commands:
                 - echo "Running Prowler as ./prowler $PROWLER_OPTIONS"
                 - cd prowler
-                - ./prowler $PROWLER_OPTIONS 
+                - ./prowler $PROWLER_OPTIONS || echo "prowler exited with error status $?"
             post_build:
               commands:
-                - echo "Done!"
+                - echo "prowler done."
       Environment:
         ComputeType: "BUILD_GENERAL1_SMALL"
         Image: "aws/codebuild/amazonlinux2-x86_64-standard:3.0"

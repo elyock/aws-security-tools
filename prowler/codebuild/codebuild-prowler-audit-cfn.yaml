@@ -2,7 +2,7 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: "Creates a CodeBuild project, roles, and lambda functions to audit an AWS account
   with prowler on a schedule. Creates the schedule using time-based events in CloudWatch/EventBridge.
-  By default, Sends 'fails' to Security Hub. Based on https://github.com/toniblyx/Prowler."
+  By default, sends 'fails' to Security Hub. Based on https://github.com/toniblyx/Prowler."
 Parameters:
   ServiceName:
     Description: Service name
@@ -23,7 +23,6 @@ Parameters:
     Type: String
     Default: 'cron(0 3 * * ? *)'
 
-# This custom resource causes stack deletion to fail; retry, skipping deletion of this resource.
 Resources:
   CodeBuildStartBuildLambdaRole:
     Type: AWS::IAM::Role

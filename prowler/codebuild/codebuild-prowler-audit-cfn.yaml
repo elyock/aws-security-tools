@@ -165,14 +165,6 @@ Resources:
       Description: Run Prowler assessment
       ServiceRole: !GetAtt CodeBuildServiceRole.Arn
       TimeoutInMinutes: 300
-      
-  ProwlerCodeBuildReportGroup:
-    Type: AWS::CodeBuild::ReportGroup
-    Properties:
-      Name: !Sub 'prowler-report-group-${ServiceName}-${AWS::StackName}'
-      Type: TEST
-      ExportConfig:
-        ExportConfigType: NO_EXPORT
 
   ProwlerLogGroup:
     Type: AWS::Logs::LogGroup

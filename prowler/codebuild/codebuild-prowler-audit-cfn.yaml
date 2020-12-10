@@ -4,10 +4,6 @@ Description: "Creates a CodeBuild project, roles, and lambda functions to audit 
   with prowler on a schedule. Creates the schedule using time-based events in CloudWatch/EventBridge.
   By default, sends 'fails' to Security Hub. Based on github.com/toniblyx/Prowler."
 Parameters:
-  ServiceName:
-    Description: Service name
-    Type: String
-    Default: 'prowler'
   LogsRetentionInDays:
     Description: Number of days to retain CodeBuild run log events.
     Type: Number

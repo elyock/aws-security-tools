@@ -123,8 +123,8 @@ Resources:
                 Effect: Allow
                 Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/service-role/prowler-codebuild-role'
 
-  # Pipe to 'echo' prevents build failures from prowler exit status 3 (when
-  #   prowler identifies security issues it returns exit status to 3).
+  # Pipe to 'echo' prevents spurious build failures from prowler exit status 3 (when
+  #   prowler identifies security issues it returns exit status 3).
   ProwlerCodeBuild:
     Type: AWS::CodeBuild::Project
     Properties:
@@ -150,10 +150,10 @@ Resources:
               commands:
                 - echo "Running Prowler as ./prowler $PROWLER_OPTIONS"
                 - cd prowler
-                - ./prowler $PROWLER_OPTIONS || echo "prowler exited with error status $?"
+                - ./prowler $PROWLER_OPTIONS || echo "Prowler exited with error status $?"
             post_build:
               commands:
-                - echo "prowler done."
+                - echo "Prowler done."
       Environment:
         ComputeType: "BUILD_GENERAL1_SMALL"
         Image: "aws/codebuild/amazonlinux2-x86_64-standard:3.0"
@@ -166,6 +166,7 @@ Resources:
       ServiceRole: !GetAtt CodeBuildServiceRole.Arn
       TimeoutInMinutes: 300
 
+  # Log group (CloudWatch) for prowler builds/runs.
   ProwlerLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -182,6 +183,8 @@ Resources:
         - Arn: !Sub ${ProwlerScheduleLambdaFunction.Arn}
           Id: ProwlerSchedule
   
+  # Permission for scheduled events to invoke lambda function to start
+  #   project build.
   ProwlerSchedulePermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -190,6 +193,7 @@ Resources:
       Principal: 'events.amazonaws.com'
       SourceArn: !Sub ${ProwlerSchedule.Arn}
 
+  # Starts scheduled project builds.
   ProwlerScheduleLambdaFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -208,8 +212,8 @@ Resources:
 
           def lambda_handler(event,context):
             codebuild_client = boto3.client('codebuild')
-            print("Running Prowler scheduled!: " + os.environ['buildName'])
+            print("Running scheduled Prowler: " + os.environ['buildName'])
             project_name = os.environ['buildName']
             response = codebuild_client.start_build(projectName=project_name)
             print(response)
-            print("Respond: SUCCESS")
+            print("Result: SUCCESS")
